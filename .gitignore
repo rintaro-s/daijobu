@@ -1,0 +1,41 @@
+# CAN モニタ一式 (STM32 -> ESP32 -> Android) で管理するのはソースとビルド設定だけ
+
+# ---- 基板データ (KiCad / ガーバー / バックアップ) ----
+TX-kiban/
+
+# ---- STM32 (CAN_TEST_TX-main) ----
+# ビルド成果物 (make / CubeIDE)
+CAN_TEST_TX-main/build/
+CAN_TEST_TX-main/Debug/
+# CubeIDE のワークスペース設定・デバッグ構成 (マシン依存)
+CAN_TEST_TX-main/.settings/
+*.launch
+# 旧 TX テスト用の PlatformIO 一式 (今のシステムでは使わない。ビルドは Makefile)
+CAN_TEST_TX-main/.pio/
+CAN_TEST_TX-main/platformio.ini
+CAN_TEST_TX-main/src/
+CAN_TEST_TX-main/boards/
+
+# ---- ESP32 (ESP32-controle) ----
+.pio/
+.vscode/
+
+# ---- Android (Android-controler) ----
+.gradle/
+.kotlin/
+.idea/
+*.iml
+local.properties
+Android-controler/app/build/
+Android-controler/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ---- 共通 ----
+.cache/
+compile_commands.json
+*.bak
+*.swp
+*~
+.DS_Store
