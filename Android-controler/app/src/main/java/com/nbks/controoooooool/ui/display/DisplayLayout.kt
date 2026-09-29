@@ -20,6 +20,7 @@ interface DisplayLayout {
 
 object DisplayLayouts {
     val all: List<DisplayLayout> = listOf(
+        DashboardLayout,
         GamepadLayout,
         DebugLayout,
         SignalListLayout,

@@ -25,7 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -115,7 +115,7 @@ private fun MonitorScreen(vm: MonitorViewModel) {
 
 @Composable
 private fun LayoutTabs(titles: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
-    PrimaryTabRow(selectedTabIndex = selected, modifier = modifier) {
+    PrimaryScrollableTabRow(selectedTabIndex = selected, modifier = modifier, edgePadding = 0.dp) {
         titles.forEachIndexed { i, title ->
             Tab(selected = selected == i, onClick = { onSelect(i) }, text = { Text(title) })
         }

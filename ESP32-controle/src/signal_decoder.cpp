@@ -27,6 +27,9 @@ struct IdState {
   bool haveSeq = false;
   uint8_t seq = 0;
   uint32_t seqLost = 0;
+  uint32_t duplicates = 0;  // SEQ・稼働時間とも前回と同じフレーム (新しい更新ではない)
+  bool haveUptime = false;
+  uint32_t uptime = 0;
   // 不正フレーム
   uint32_t rejected = 0;
   Reject lastReject = Reject::None;  // 直近フレームが不正なら None 以外
@@ -193,12 +196,23 @@ void onFrame(const CanFrame &f, uint32_t nowMs) {
 
   if (r.seqByte >= 0) {
     uint8_t seq = f.data[r.seqByte];
+    bool hasUp = r.uptimeByte >= 0;
+    uint32_t up = hasUp ? readLe(&f.data[r.uptimeByte], 4) : 0;
     if (st.haveSeq) {
       uint8_t diff = (uint8_t)(seq - st.seq);
-      if (diff > 1) st.seqLost += diff - 1u;
+      if (hasUp && st.haveUptime && diff == 0 && up == st.uptime) {
+        // 完全な重複: 新しい更新の証拠にならないので受信時刻・値を更新しない
+        st.duplicates++;
+        return;
+      }
+      // 稼働時間が巻き戻った場合は送信元の再起動とみなし、欠落に数えない
+      bool restarted = hasUp && st.haveUptime && up < st.uptime;
+      if (diff > 1 && !restarted) st.seqLost += diff - 1u;
     }
     st.seq = seq;
     st.haveSeq = true;
+    st.uptime = up;
+    st.haveUptime = hasUp;
   }
 
   st.received = true;
@@ -265,6 +279,8 @@ String dataJson(uint32_t nowMs, uint32_t uartOk, uint32_t uartCrcErr) {
     if (st.haveSeq) js += st.seq; else js += "null";
     js += ",\"lost\":";
     js += st.seqLost;
+    js += ",\"dup\":";
+    js += st.duplicates;
     js += ",\"bad\":";
     js += st.rejected;
     js += ",\"rej\":";

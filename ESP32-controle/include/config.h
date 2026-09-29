@@ -22,7 +22,7 @@
 // TX-kiban 回路図: STM32 PA2(USART2_TX) - ESP32 GPIO17, PA3(USART2_RX) - GPIO16
 // Serial2 の標準 (RX=16, TX=17) とは逆なので注意。受信できないときは RX/TX を入れ替えて試す。
 #ifndef BRIDGE_BAUD
-#define BRIDGE_BAUD 115200  // STM32 の USART2 (CubeMX 設定) と一致させる
+#define BRIDGE_BAUD 921600  // STM32 の ESP_UART_BAUD (Core/Src/main.c) と一致させる
 #endif
 #ifndef BRIDGE_RX_PIN
 #define BRIDGE_RX_PIN 17
@@ -33,7 +33,10 @@
 
 // ---- 配信 ----
 #ifndef SEND_PERIOD_MS
-#define SEND_PERIOD_MS 20  // 50 Hz
+#define SEND_PERIOD_MS 50  // 20 Hz (1 行約 3.5KB)
+#endif
+#ifndef CLIENT_STALL_TIMEOUT_MS
+#define CLIENT_STALL_TIMEOUT_MS 2000  // この時間送れない相手は切断する (スマホが消えた等)
 #endif
 #ifndef DEBUG_PRINT_PERIOD_MS
 #define DEBUG_PRINT_PERIOD_MS 1000

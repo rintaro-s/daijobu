@@ -36,7 +36,21 @@ case "$choice" in
     echo "=== STM32 ビルド ==="
     make -C "$STM_DIR" -j"$(nproc)"
     if ask_flash "ST-Link で書き込む？"; then
-      st-flash --connect-under-reset --reset write "$STM_DIR/build/curearcanashadowTX.bin" 0x08000000
+      # 診断で起動したままのデバッガが ST-Link を掴んでいると書き込めないので終了させる
+      pkill -x st-util 2>/dev/null || true
+      pkill -x openocd 2>/dev/null || true
+      ok=0
+      for try in 1 2 3; do
+        if st-flash --connect-under-reset --reset write "$STM_DIR/build/curearcanashadowTX.bin" 0x08000000; then
+          ok=1; break
+        fi
+        echo "書き込み失敗 ($try/3)。2 秒後に再試行します..." >&2
+        sleep 2
+      done
+      if [[ $ok -ne 1 ]]; then
+        echo "STM32 に書き込めませんでした。ST-Link の USB を挿し直す / 基板の電源を確認してください。" >&2
+        exit 1
+      fi
     fi
     ;;
   2)

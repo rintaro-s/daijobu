@@ -17,8 +17,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -35,11 +37,15 @@ sealed interface LinkState {
 }
 
 /**
- * ESP32 の AP にアプリ単位で接続 (WifiNetworkSpecifier) し、TCP で JSON Lines を受け取る。
+ * ESP32 の AP に繋いで TCP で JSON Lines を受け取る。接続順・切断のされ方に依存せず自動で復帰する。
  *
- * - 初回だけシステムの「デバイスに接続」ダイアログが出る。一度許可すると以降は自動で繋がる
- * - この接続はアプリ専用で、スマホのモバイル通信などには影響しない
- * - 切れたら自動で再接続する
+ * 経路は 2 つ用意し、繋がる方を使う:
+ *   1. WifiNetworkSpecifier でアプリ専用に AP へ接続 (初回だけシステムの確認ダイアログ)
+ *   2. スマホが設定画面から既に CTRL-MONITOR に繋がっている場合、その Wi-Fi 経由で直接接続
+ *
+ * - 接続ループは [start] から [stop] まで回り続け、切れたら 1 秒後に繋ぎ直す
+ * - ダイアログがキャンセル / AP が見つからない場合も、数秒後に自動で要求し直す
+ * - データが READ_TIMEOUT_MS 来なければ切断扱いにして繋ぎ直す
  */
 class EspLink(context: Context, private val scope: CoroutineScope) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
@@ -51,13 +57,28 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     val telemetry: StateFlow<Telemetry> = _telemetry.asStateFlow()
 
     private var callback: ConnectivityManager.NetworkCallback? = null
-    private var readerJob: Job? = null
+    private var loopJob: Job? = null
+    @Volatile private var specifierNetwork: Network? = null
     @Volatile private var socket: Socket? = null
 
     fun start() {
-        if (callback != null) return
-        _state.value = LinkState.JoiningWifi
+        if (loopJob?.isActive == true) return
+        requestSpecifierNetwork()
+        loopJob = scope.launch(Dispatchers.IO) { connectLoop() }
+    }
 
+    fun stop() {
+        loopJob?.cancel()
+        loopJob = null
+        closeSocket()
+        unregisterCallback()
+        specifierNetwork = null
+        _state.value = LinkState.Idle
+    }
+
+    // ---- 経路 1: アプリ専用の Wi-Fi 接続 ----
+    private fun requestSpecifierNetwork() {
+        unregisterCallback()
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ConnectionConfig.SSID)
             .setWpa2Passphrase(ConnectionConfig.PASSPHRASE)
@@ -70,59 +91,91 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
 
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.i(TAG, "wifi available: $network")
-                startReader(network)
+                Log.i(TAG, "specifier network available: $network")
+                specifierNetwork = network
             }
 
             override fun onLost(network: Network) {
-                Log.i(TAG, "wifi lost")
-                stopReader()
-                _state.value = LinkState.JoiningWifi
+                Log.i(TAG, "specifier network lost")
+                if (specifierNetwork == network) {
+                    specifierNetwork = null
+                    closeSocket()  // 読み込み中なら即座に抜けて繋ぎ直す
+                }
             }
 
             override fun onUnavailable() {
-                // ダイアログでキャンセルされた / AP が見つからない
+                // ダイアログのキャンセル / AP が見つからない。少し待って要求し直す
+                Log.i(TAG, "specifier unavailable, retry later")
                 callback = null
-                _state.value = LinkState.Error("${ConnectionConfig.SSID} に接続できませんでした")
+                scope.launch {
+                    delay(SPECIFIER_RETRY_MS)
+                    if (loopJob?.isActive == true && callback == null) requestSpecifierNetwork()
+                }
             }
         }
         callback = cb
-        cm.requestNetwork(request, cb)
+        try {
+            cm.requestNetwork(request, cb)
+        } catch (e: Exception) {
+            Log.w(TAG, "requestNetwork failed: ${e.message}")
+            callback = null
+        }
     }
 
-    fun stop() {
-        stopReader()
+    private fun unregisterCallback() {
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
-        _state.value = LinkState.Idle
     }
 
-    private fun startReader(network: Network) {
-        stopReader()
-        readerJob = scope.launch(Dispatchers.IO) {
-            while (isActive) {
-                _state.value = LinkState.ConnectingTcp
+    // ---- 経路 2: 既に繋がっている Wi-Fi ----
+    @Suppress("DEPRECATION")
+    private fun wifiNetworks(): List<Network> = cm.allNetworks.filter {
+        cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+    }
+
+    // ---- 接続ループ ----
+    private suspend fun connectLoop() {
+        while (currentCoroutineContext().isActive) {
+            val candidates = (listOfNotNull(specifierNetwork) + wifiNetworks()).distinct()
+            var connected = false
+            for (net in candidates) {
+                val s = tryConnect(net) ?: continue
+                connected = true
+                _state.value = LinkState.Connected
                 try {
-                    val s = network.socketFactory.createSocket() as Socket
-                    socket = s
-                    s.tcpNoDelay = true
-                    s.soTimeout = ConnectionConfig.READ_TIMEOUT_MS
-                    s.connect(
-                        InetSocketAddress(ConnectionConfig.HOST, ConnectionConfig.PORT),
-                        ConnectionConfig.CONNECT_TIMEOUT_MS,
-                    )
-                    _state.value = LinkState.Connected
                     readLines(s)
                 } catch (e: Exception) {
-                    if (!isActive) break
-                    Log.w(TAG, "tcp: ${e.message}")
-                    _state.value = LinkState.Error("ESP32 と通信できません (${e.javaClass.simpleName})")
+                    Log.w(TAG, "read: ${e.message}")
                 } finally {
-                    runCatching { socket?.close() }
-                    socket = null
+                    closeSocket()
                 }
-                delay(ConnectionConfig.RETRY_DELAY_MS)
+                break
             }
+            _state.value = when {
+                connected -> LinkState.ConnectingTcp  // 切れた直後。すぐ繋ぎ直す
+                candidates.isEmpty() -> LinkState.JoiningWifi
+                else -> LinkState.Error("ESP32 (${ConnectionConfig.HOST}) に届きません")
+            }
+            delay(ConnectionConfig.RETRY_DELAY_MS)
+        }
+    }
+
+    private suspend fun tryConnect(net: Network): Socket? = withContext(Dispatchers.IO) {
+        _state.value = LinkState.ConnectingTcp
+        try {
+            val s = net.socketFactory.createSocket() as Socket
+            s.tcpNoDelay = true
+            s.soTimeout = ConnectionConfig.READ_TIMEOUT_MS
+            s.connect(
+                InetSocketAddress(ConnectionConfig.HOST, ConnectionConfig.PORT),
+                ConnectionConfig.CONNECT_TIMEOUT_MS,
+            )
+            socket = s
+            Log.i(TAG, "tcp connected via $net")
+            s
+        } catch (e: Exception) {
+            Log.d(TAG, "tcp via $net failed: ${e.message}")
+            null
         }
     }
 
@@ -148,15 +201,13 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
         }
     }
 
-    private fun stopReader() {
-        readerJob?.cancel()
-        readerJob = null
+    private fun closeSocket() {
         runCatching { socket?.close() }
         socket = null
     }
 
     companion object {
         private const val TAG = "EspLink"
+        private const val SPECIFIER_RETRY_MS = 5000L
     }
 }
-

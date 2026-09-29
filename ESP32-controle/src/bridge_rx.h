@@ -1,5 +1,5 @@
 // STM32 から UART で届く CAN フレームのデコーダ
-// フレーム形式は CAN_TEST_TX-main/Core/Inc/can_uart_bridge.h と一致させること
+// フレーム形式は CAN_TEST_TX-main/Core/Src/main.c (先頭コメント) と一致させること
 #pragma once
 #include <stddef.h>
 #include <stdint.h>

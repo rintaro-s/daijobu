@@ -31,6 +31,8 @@ data class FrameStatus(
     val seq: Int? = null,
     /** シーケンスの飛びから数えた欠落数の累計 (手掛かりであり保証ではない) */
     val seqLost: Long = 0,
+    /** SEQ・稼働時間とも前回と同じで捨てたフレーム数 */
+    val duplicates: Long = 0,
     /** 条件を満たさず捨てたフレーム数 */
     val rejected: Long = 0,
     /** 直近フレームが不正だった理由。"fmt" / "len:N" / "ver:N"。正常なら null */
@@ -113,6 +115,7 @@ object TelemetryParser {
                 hz = f.optDouble("hz", 0.0),
                 seq = if (f.isNull("seq")) null else f.optInt("seq"),
                 seqLost = f.optLong("lost"),
+                duplicates = f.optLong("dup"),
                 rejected = f.optLong("bad"),
                 reject = if (f.isNull("rej")) null else f.optString("rej"),
             )

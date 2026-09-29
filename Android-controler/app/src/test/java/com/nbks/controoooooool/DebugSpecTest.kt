@@ -55,7 +55,10 @@ class DebugSpecTest {
     fun states_and_bits() {
         assertEquals("原点復帰中", DebugSpec.stateName(Mech.LIFT, 3))
         assertEquals("未対応(5)", DebugSpec.stateName(Mech.LIFT, 5))
-        assertEquals("復帰/補充中", DebugSpec.stateName(Mech.SHOT, 4))
+        assertEquals("状態 4", DebugSpec.stateName(Mech.SHOT, 4))
+        assertEquals(listOf("発射RUN", "MINUS調整"), DebugSpec.cmd310Names(0x21))
+        assertEquals(listOf("入力有効", "予約bit(0x80)"), DebugSpec.cmd150Names(0x81))
+        assertEquals("未受信", DebugSpec.ageText(65535))
         assertEquals("反転待ち", DebugSpec.stateName(Mech.WHEEL, 3))
         assertEquals("未対応(4)", DebugSpec.stopReason(4))
         assertEquals(listOf("指令タイムアウト", "非常停止"), DebugSpec.errorNames(0x0021))

@@ -31,7 +31,7 @@ import com.nbks.controoooooool.ui.display.DebugSpec.Link
 import com.nbks.controoooooool.ui.display.DebugSpec.Mech
 
 /**
- * デバッグ用 CAN FD 通信仕様 V1 の表示 (昇降 ×3 / 発射 / 足回り ×4)。
+ * デバッグ用 CAN FD 通信仕様 V2 の表示 (昇降 ×3 / 発射 / 足回り ×4)。
  *
  * 仕様 8 節に従い:
  *   - 初受信前は「未受信」、最後の有効受信から 300ms 超は「通信途絶」
@@ -51,7 +51,7 @@ object DebugLayout : DisplayLayout {
     override fun Content(telemetry: Telemetry, modifier: Modifier) {
         val sections = listOf(
             "昇降" to Mech.LIFT,
-            "発射" to Mech.SHOT,
+            "発射・装填 (指令状態)" to Mech.SHOT,
             "足回り" to Mech.WHEEL,
         )
         LazyVerticalGrid(
@@ -67,6 +67,17 @@ object DebugLayout : DisplayLayout {
                 items(DebugSpec.units.filter { it.mech == mech }, key = { it.prefix }) { u ->
                     UnitCard(u, telemetry)
                 }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }, key = "h-ctrl") {
+                Text(
+                    "制御・安全用 ID",
+                    Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            items(DebugSpec.units.filter { it.mech.isControl }, key = { it.prefix }) { u ->
+                UnitCard(u, telemetry)
             }
             item(span = { GridItemSpan(maxLineSpan) }, key = "note") {
                 Text(
@@ -109,7 +120,7 @@ object DebugLayout : DisplayLayout {
     private fun UnitCard(u: DebugSpec.Unit, t: Telemetry) {
         val link = DebugSpec.link(t, u)
         val frame = t.frame(u.canId)
-        val hasValues = t.value("${u.prefix}.ver") != null
+        val hasValues = t.value("${u.prefix}.ver") != null || t.value("${u.prefix}.b0") != null
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -137,14 +148,19 @@ object DebugLayout : DisplayLayout {
                             Mech.LIFT -> LiftBody(r)
                             Mech.SHOT -> ShotBody(r)
                             Mech.WHEEL -> WheelBody(r)
+                            Mech.LIFT_CMD -> LiftCmdBody(r)
+                            Mech.LIFT_ST -> RawBody(r)
+                            Mech.SHOT_CMD -> ShotCmdBody(r)
+                            Mech.LOAD_SENS -> LoadSensBody(r)
                         }
-                        CommonFooter(r)
+                        if (!u.mech.isControl) CommonFooter(r)
                     }
                 }
                 if (frame != null && (frame.seq != null || frame.rejected > 0)) {
                     Text(
                         buildString {
                             append("SEQ ${frame.seq ?: "--"}  欠落 ${frame.seqLost}")
+                            if (frame.duplicates > 0) append("  重複 ${frame.duplicates}")
                             if (frame.rejected > 0) append("  不正 ${frame.rejected}")
                             append("  %.0fHz".format(frame.hz))
                         },
@@ -185,7 +201,7 @@ object DebugLayout : DisplayLayout {
         val homed = r.has(DebugSpec.F_HOMED)
         MainLine(
             rateText,
-            DebugSpec.stateName(Mech.LIFT, r.int("state") ?: -1),
+            DebugSpec.stateName(Mech.LIFT, r.int("state")),
             "PWM ${DebugSpec.pwmText(r.int("pwm"))}",
             if (homed) "HOME済" else "未原点",
         )
@@ -204,36 +220,53 @@ object DebugLayout : DisplayLayout {
         }
     }
 
-    // ---- 発射 ----
+    // ---- 発射・装填・サーボ指令状態 0x310 (操作mainが把握している指令。機構の応答ではない) ----
     @Composable
     private fun ShotBody(r: DebugSpec.Reader) {
         MainLine(
-            DebugSpec.stateName(Mech.SHOT, r.int("state") ?: -1),
-            "PWM ${DebugSpec.pwmText(r.int("pwm"))}",
+            DebugSpec.stateName(Mech.SHOT, r.int("state")),
+            "PWM ${r.int("pwm")?.let { "%.1f%%".format(it / 10.0) } ?: "--"}",
+            "角度 ${r.int("angle")?.let { "${it}°" } ?: "--"}",
         )
-        val target = r.int("target_rpm")
-        val targetText =
-            if (target == null || !r.has(DebugSpec.F_TARGET) || target == DebugSpec.U16_INVALID) "未計測"
-            else "$target rpm"
-        Mono("目標 $targetText   実測 ${DebugSpec.rpmText(r.flags, r.long("rpm10"))}")
-        val shots = r.long("shots")
+        BitChips("指令", DebugSpec.cmd310Names(r.int("cmd") ?: 0), "なし", OkColor)
         Mono(
-            "発射回数 " +
-                if (shots == null || !r.has(DebugSpec.F_SHOTS) || shots == DebugSpec.U32_INVALID) "未計測"
-                else "$shots"
+            "調整 ${DebugSpec.adjustName(r.int("adjust"))}   " +
+                "プリセット ${DebugSpec.presetName(r.int("preset"))}   " +
+                "装填段階 ${r.int("stage") ?: "--"}"
         )
-        if (r.has(DebugSpec.F_SENSOR)) {
-            val s = r.int("sensor") ?: 0
-            Mono(
-                listOf(
-                    if (s and 1 != 0) "弾あり" else "弾なし",
-                    if (s and 2 != 0) "原点ON" else "原点OFF",
-                    if (s and 4 != 0) "回転数OK" else "回転数範囲外",
-                ).joinToString("  ") + if (s and 0xFFF8 != 0) "  予約bit(0x%04X)".format(s and 0xFFF8) else ""
-            )
-        } else {
-            Mono("センサー: 未対応")
-        }
+        Mono("センサー ${DebugSpec.sensorName(r.int("sensor"))} (${DebugSpec.ageText(r.int("sensor_age"))})")
+        Mono("コントローラー受信 ${DebugSpec.ageText(r.int("ctrl_age"))}")
+    }
+
+    // ---- 制御用 ID ----
+    @Composable
+    private fun LiftCmdBody(r: DebugSpec.Reader) {
+        BitChips("指令", DebugSpec.lift130Names(r.int("flags") ?: 0), "なし", UnsupportedColor)
+        Mono("ver ${r.int("ver") ?: "--"}   SEQ ${r.int("seq") ?: "--"}")
+    }
+
+    @Composable
+    private fun RawBody(r: DebugSpec.Reader) {
+        // 中身の並びが台帳に無いので生バイトで表示
+        Mono((0..7).joinToString(" ") { i -> r.int("b$i")?.let { "%02X".format(it) } ?: "--" })
+    }
+
+    @Composable
+    private fun ShotCmdBody(r: DebugSpec.Reader) {
+        MainLine(
+            "PWM ${r.int("pwm")?.let { "%.1f%%".format(it / 10.0) } ?: "--"}",
+            "角度 ${r.int("angle")?.let { "${it}°" } ?: "--"}",
+            "プリセット ${DebugSpec.presetName(r.int("preset"))}",
+        )
+        BitChips("指令", DebugSpec.cmd150Names(r.int("flags") ?: 0), "なし", OkColor)
+    }
+
+    @Composable
+    private fun LoadSensBody(r: DebugSpec.Reader) {
+        MainLine(
+            "センサー ${if ((r.int("sensor") ?: 0) != 0) "検出" else "非検出"}",
+            if ((r.int("ready") ?: 0) != 0) "準備完了" else "準備中",
+        )
     }
 
     // ---- 足回り ----
@@ -241,12 +274,12 @@ object DebugLayout : DisplayLayout {
     private fun WheelBody(r: DebugSpec.Reader) {
         val cmd = r.int("cmd")
         MainLine(
-            DebugSpec.stateName(Mech.WHEEL, r.int("state") ?: -1),
+            DebugSpec.stateName(Mech.WHEEL, r.int("state")),
             "CMD ${cmd?.let { "%+d".format(it) } ?: "--"}",
             "PWM ${DebugSpec.pwmText(r.int("pwm"))}",
         )
         Mono("RPM ${DebugSpec.rpmText(r.flags, r.long("rpm10"))}   RX ${r.long("rx") ?: "--"}")
-        Mono("STOP理由 ${DebugSpec.stopReason(r.int("stop") ?: -1)}")
+        Mono("STOP理由 ${DebugSpec.stopReason(r.int("stop"))}")
     }
 
     // ---- 共通: 指令受信状態 / 異常ビット / 稼働時間 ----

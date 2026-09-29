@@ -62,6 +62,7 @@ object GamepadLayout : DisplayLayout {
         const val PLUS = "PLUS"
         const val MINUS = "MINUS"
         const val HOME = "HOME"
+        const val CAPTURE = "CAPTURE"
 
         /** スティックの値の範囲 (±この値で端まで振り切る) */
         const val STICK_MAX = 127.0
@@ -182,7 +183,7 @@ object GamepadLayout : DisplayLayout {
         drawRoundButton(t, sig.MINUS, "−", Offset(400f, 185f), 24f, tm, alpha)
         drawRoundButton(t, sig.PLUS, "+", Offset(600f, 185f), 24f, tm, alpha)
         drawRoundButton(t, sig.HOME, "⌂", Offset(560f, 262f), 24f, tm, alpha)
-        drawRoundRect(PartDark, Offset(424f, 244f), Size(36f, 36f), CornerRadius(6f), alpha = alpha)
+        drawRoundRect(if (t.pressed(sig.CAPTURE)) On else PartDark, Offset(424f, 244f), Size(36f, 36f), CornerRadius(6f), alpha = alpha)
 
         // ---- スティック ----
         drawStick(t, sig.LX, sig.LY, Offset(270f, 245f), alpha)

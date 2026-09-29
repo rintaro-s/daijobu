@@ -39,3 +39,5 @@ compile_commands.json
 *.swp
 *~
 .DS_Store
+
+*.zip

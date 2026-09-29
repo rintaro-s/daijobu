@@ -26,7 +26,7 @@ AS      := $(PREFIX)gcc -x assembler-with-cpp
 OBJCOPY := $(PREFIX)objcopy
 SIZE    := $(PREFIX)size
 
-# CubeMX 生成の Core/Src (main.c の USER CODE + can_uart_bridge.c) をビルドする。
+# CubeMX 生成の Core/Src (処理はすべて main.c の USER CODE 内) をビルドする。
 # src/main.c は pio 用の旧 TX テストなので使わない。
 C_SOURCES := $(wildcard Core/Src/*.c) $(wildcard Drivers/STM32G4xx_HAL_Driver/Src/*.c)
 ASM_SOURCES := Core/Startup/startup_stm32g441kbtx.s
