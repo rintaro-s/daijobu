@@ -60,6 +60,9 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     private var loopJob: Job? = null
     @Volatile private var specifierNetwork: Network? = null
     @Volatile private var socket: Socket? = null
+    @Volatile private var socketNetwork: Network? = null
+    private var espReboots = 0
+    private var lastEspUptime = -1L
 
     fun start() {
         if (loopJob?.isActive == true) return
@@ -97,19 +100,19 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
 
             override fun onLost(network: Network) {
                 Log.i(TAG, "specifier network lost")
-                if (specifierNetwork == network) {
-                    specifierNetwork = null
-                    closeSocket()  // 読み込み中なら即座に抜けて繋ぎ直す
-                }
+                if (specifierNetwork == network) specifierNetwork = null
+                // その Wi-Fi 経由で読んでいた場合だけ閉じる (別経路で繋がっているなら切らない)
+                if (socketNetwork == network) closeSocket()
             }
 
             override fun onUnavailable() {
-                // ダイアログのキャンセル / AP が見つからない。少し待って要求し直す
+                // ダイアログのキャンセル / AP が見つからない。
+                // 要求のたびに確認ダイアログが出るので、間隔を空け、既に ESP32 と通信できているなら出し直さない
                 Log.i(TAG, "specifier unavailable, retry later")
                 callback = null
                 scope.launch {
                     delay(SPECIFIER_RETRY_MS)
-                    if (loopJob?.isActive == true && callback == null) requestSpecifierNetwork()
+                    if (loopJob?.isActive == true && callback == null && socket == null) requestSpecifierNetwork()
                 }
             }
         }
@@ -134,13 +137,18 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     }
 
     // ---- 接続ループ ----
+    // 状態表示は「Wi-Fi 未接続 (JoiningWifi)」と「Wi-Fi はあるが ESP32 と通信中 (ConnectingTcp)」の 2 つだけ。
+    // 1 回の失敗ごとにエラー表示に切り替えるとチカチカするので、リトライ中は ConnectingTcp のままにする。
     private suspend fun connectLoop() {
         while (currentCoroutineContext().isActive) {
             val candidates = (listOfNotNull(specifierNetwork) + wifiNetworks()).distinct()
-            var connected = false
+            _state.value = if (candidates.isEmpty()) LinkState.JoiningWifi else LinkState.ConnectingTcp
+
+            var wasConnected = false
             for (net in candidates) {
                 val s = tryConnect(net) ?: continue
-                connected = true
+                wasConnected = true
+                socketNetwork = net
                 _state.value = LinkState.Connected
                 try {
                     readLines(s)
@@ -151,17 +159,12 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
                 }
                 break
             }
-            _state.value = when {
-                connected -> LinkState.ConnectingTcp  // 切れた直後。すぐ繋ぎ直す
-                candidates.isEmpty() -> LinkState.JoiningWifi
-                else -> LinkState.Error("ESP32 (${ConnectionConfig.HOST}) に届きません")
-            }
-            delay(ConnectionConfig.RETRY_DELAY_MS)
+            // 通信中だったものが切れた直後はすぐ繋ぎ直す。繋がらなかったときだけ待つ
+            if (!wasConnected) delay(ConnectionConfig.RETRY_DELAY_MS) else delay(200)
         }
     }
 
     private suspend fun tryConnect(net: Network): Socket? = withContext(Dispatchers.IO) {
-        _state.value = LinkState.ConnectingTcp
         try {
             val s = net.socketFactory.createSocket() as Socket
             s.tcpNoDelay = true
@@ -192,8 +195,13 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
                         schema = TelemetryParser.parseSchema(o)
                         _telemetry.value = _telemetry.value.copy(schema = schema)
                     }
-                    "data" -> _telemetry.value =
-                        TelemetryParser.parseData(o, schema, SystemClock.elapsedRealtime())
+                    "data" -> {
+                        val t = TelemetryParser.parseData(o, schema, SystemClock.elapsedRealtime())
+                        // ESP32 の稼働時間が巻き戻ったら ESP32 が再起動した (電源低下・クラッシュ等の見分け用)
+                        if (lastEspUptime >= 0 && t.espUptimeMs + 1000 < lastEspUptime) espReboots++
+                        lastEspUptime = t.espUptimeMs
+                        _telemetry.value = t.copy(espReboots = espReboots)
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "bad line: ${e.message}")
@@ -204,10 +212,11 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     private fun closeSocket() {
         runCatching { socket?.close() }
         socket = null
+        socketNetwork = null
     }
 
     companion object {
         private const val TAG = "EspLink"
-        private const val SPECIFIER_RETRY_MS = 5000L
+        private const val SPECIFIER_RETRY_MS = 30_000L
     }
 }

@@ -12,6 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.Spacer
@@ -113,11 +116,18 @@ private fun MonitorScreen(vm: MonitorViewModel) {
     }
 }
 
+private val HeaderButtonPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+
 @Composable
 private fun LayoutTabs(titles: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
     PrimaryScrollableTabRow(selectedTabIndex = selected, modifier = modifier, edgePadding = 0.dp) {
         titles.forEachIndexed { i, title ->
-            Tab(selected = selected == i, onClick = { onSelect(i) }, text = { Text(title) })
+            // 既定の高さ (48dp) より薄くして、中身の表示領域を広げる
+            Tab(
+                selected = selected == i, onClick = { onSelect(i) },
+                modifier = Modifier.height(34.dp),
+                text = { Text(title, fontSize = 13.sp, maxLines = 1) },
+            )
         }
     }
 }
@@ -140,20 +150,24 @@ private fun StatusBar(
         is LinkState.Error -> Color(0xFFD32F2F) to state.message
     }
     Row(
-        modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier.padding(horizontal = 12.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.size(12.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.size(10.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
         Text(
             text, Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 13.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         if (state == LinkState.Idle || state is LinkState.Error) {
-            Button(onClick = onConnect) { Text("接続") }
+            Button(onClick = onConnect, modifier = Modifier.height(30.dp), contentPadding = HeaderButtonPadding) {
+                Text("接続", fontSize = 13.sp)
+            }
         } else {
-            OutlinedButton(onClick = onDisconnect) { Text("切断") }
+            OutlinedButton(onClick = onDisconnect, modifier = Modifier.height(30.dp), contentPadding = HeaderButtonPadding) {
+                Text("切断", fontSize = 13.sp)
+            }
         }
     }
 }

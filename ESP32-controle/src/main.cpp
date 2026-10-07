@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <errno.h>
+#include <esp_system.h>
 #include <lwip/sockets.h>
 
 #include "bridge_rx.h"
@@ -128,8 +129,9 @@ void setup() {
   server.begin();
   server.setNoDelay(true);
 
-  Serial.printf("\n=== CAN monitor ===\nAP  : %s / %s\nIP  : %s:%d\nUART: %d bps RX=%d TX=%d\n",
-                AP_SSID, AP_PASS, WiFi.softAPIP().toString().c_str(), TCP_PORT, BRIDGE_BAUD,
+  decoder::setBootReason((int)esp_reset_reason());
+  Serial.printf("\n=== CAN monitor ===\nreset reason: %d (1=電源投入 3=SW 4=panic 5-7=WDT 9=ブラウンアウト)\nAP  : %s / %s\nIP  : %s:%d\nUART: %d bps RX=%d TX=%d\n",
+                (int)esp_reset_reason(), AP_SSID, AP_PASS, WiFi.softAPIP().toString().c_str(), TCP_PORT, BRIDGE_BAUD,
                 BRIDGE_RX_PIN, BRIDGE_TX_PIN);
 }
 
@@ -157,7 +159,9 @@ void loop() {
     lastDebug = now;
     decoder::updateRates();
     int nClients = activeClients();
-    Serial.printf("uart ok=%lu crc_err=%lu | %s| sta=%d tcp=%d\n", (unsigned long)bridge.okCount,
+    Serial.printf("up=%lus heap=%lu/min%lu uart ok=%lu crc_err=%lu | %s| sta=%d tcp=%d\n",
+                  (unsigned long)(now / 1000), (unsigned long)ESP.getFreeHeap(),
+                  (unsigned long)ESP.getMinFreeHeap(), (unsigned long)bridge.okCount,
                   (unsigned long)bridge.crcErrors, decoder::summary(now).c_str(),
                   WiFi.softAPgetStationNum(), nClients);
   }

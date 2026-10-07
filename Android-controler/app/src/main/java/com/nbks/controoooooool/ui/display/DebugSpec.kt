@@ -12,7 +12,7 @@ import com.nbks.controoooooool.model.Telemetry
  */
 object DebugSpec {
     enum class Mech {
-        LIFT, SHOT, WHEEL,
+        LIFT, SHOT, WHEEL, GYRO,
         // 制御・安全用 ID (表示のみ)
         LIFT_CMD, LIFT_ST, SHOT_CMD, LOAD_SENS;
 
@@ -30,6 +30,7 @@ object DebugSpec {
         Unit(0x322, "WFR", "右前", Mech.WHEEL),
         Unit(0x323, "WRL", "左後", Mech.WHEEL),
         Unit(0x324, "WRR", "右後", Mech.WHEEL),
+        Unit(0x200, "GYRO", "ジャイロ (BNO055)", Mech.GYRO),
         Unit(0x130, "LCMD", "昇降システム指令", Mech.LIFT_CMD),
         Unit(0x141, "LST1", "昇降ID1 状態", Mech.LIFT_ST),
         Unit(0x142, "LST2", "昇降ID2 状態", Mech.LIFT_ST),
@@ -72,8 +73,13 @@ object DebugSpec {
     const val F_TARGET = 1 shl 3       // 目標値 (昇降: 目標位置 / 発射: 目標RPM)
     const val F_SHOTS = 1 shl 4        // 発射回数
     const val F_CMD_FRESH = 1 shl 5    // 必要な操作指令を新鮮な状態で受信できている
+    // 昇降 V30 で追加 (昇降のみ。bit2 は昇降では「下限スイッチ機能有効」)
+    const val F_PEER_FRESH = 1 shl 6   // 他 2 軸の位置を 100ms 以内に受信している
+    const val F_V30 = 1 shl 7          // V30 位置共有対応マーカー
+    const val F_LOWER_SW = 1 shl 2     // 昇降: 下限スイッチ機能有効
 
-    private val liftStates = listOf("停止", "UP", "DOWN", "原点復帰中", "異常停止")
+    // V30: 0=PWMゼロ (他軸位置不足・原点待ちでも 0 になるので停止理由は断定しない) / 3=未使用
+    private val liftStates = listOf("PWMゼロ", "UP出力", "DOWN出力", "未使用(3)", "停止(故障/指令無効/禁止)")
     private val shotStates = emptyList<String>()  // 0x310 の状態番号の意味は台帳に記載なし
     private val wheelStates = listOf("出力停止", "正方向", "逆方向", "反転待ち", "異常停止")
     private val stopReasons = listOf("通常/中立", "操作CAN受信無効", "反転待ち", "制御ループ遅延")
@@ -99,6 +105,33 @@ object DebugSpec {
     fun stopReason(v: Int?): String = if (v == null) "--" else stopReasons.getOrNull(v) ?: "未対応($v)"
 
     /** 異常ビットの名前一覧。予約ビット (8-15) が立っていればそれも示す */
+    // 昇降 V30 の故障/診断ビット (byte22-23)。足回り等の共通定義とは意味が違う
+    private val liftErrorBits = listOf(
+        "0x123/0x130未受信", "エンコーダー停滞", "受信FIFO損失", "制御周期超過",
+        "逆方向カウント", "カウント飛び/範囲異常", "3台位置差継続", "制御側受信異常",
+    )
+
+    fun errorNamesFor(mech: Mech, bits: Int): List<String> {
+        if (mech != Mech.LIFT) return errorNames(bits)
+        val names = liftErrorBits.filterIndexed { i, _ -> bits and (1 shl i) != 0 }.toMutableList()
+        if (bits and 0xFF00 != 0) names += "予約bit(0x%04X)".format(bits and 0xFF00)
+        return names
+    }
+
+    // ---- ジャイロ 0x200 ----
+    /** 測定値が有効なのは I2C 成功 (bit0) と融合測定有効 (bit1) の両方が立っているとき */
+    fun gyroValid(flags: Int) = flags and 0x03 == 0x03
+
+    /** 校正 byte2: SYS=bit7-6 GYR=bit5-4 ACC=bit3-2 MAG=bit1-0。I2C 失敗時の 0xFF は「不明」 */
+    fun calText(flags: Int, cal: Int?): String = when {
+        cal == null -> "--"
+        flags and 0x01 == 0 -> "校正情報不明"
+        else -> "SYS ${(cal shr 6) and 3}  GYR ${(cal shr 4) and 3}  ACC ${(cal shr 2) and 3}  MAG ${cal and 3}"
+    }
+
+    fun degText(v: Double?, valid: Boolean, unit: String = "°") =
+        if (!valid || v == null) "--" else "%.1f%s".format(v, unit)
+
     fun errorNames(bits: Int): List<String> {
         val names = errorBits.filterIndexed { i, _ -> bits and (1 shl i) != 0 }.toMutableList()
         if (bits and 0xFF00 != 0) names += "予約bit(0x%04X)".format(bits and 0xFF00)
@@ -114,7 +147,8 @@ object DebugSpec {
     fun pwmText(raw: Int?): String = when {
         raw == null -> "--"
         raw == I16_INVALID -> "取得不可"
-        else -> "%+.1f%%".format(raw / 10.0)
+        // PWM は生の値 (permille、-1000～+1000) のまま表示する
+        else -> "%+d".format(raw)
     }
 
     /** 実測RPM×10。有効フラグと無効値の両方が有効なときだけ値を出す (0rpm と未計測を区別) */
@@ -157,6 +191,7 @@ object DebugSpec {
     class Reader(private val t: Telemetry, private val prefix: String) {
         fun int(key: String): Int? = t.value("$prefix.$key")?.toInt()
         fun long(key: String): Long? = t.value("$prefix.$key")?.toLong()
+        fun dbl(key: String): Double? = t.value("$prefix.$key")
         val flags: Int get() = int("flags") ?: 0
         fun has(flag: Int) = flags and flag != 0
     }

@@ -56,6 +56,12 @@ data class Telemetry(
     val values: Map<String, Double> = emptyMap(),
     val frames: List<FrameStatus> = emptyList(),
     val unknown: List<UnknownFrame> = emptyList(),
+    /** ESP32 の稼働時間 ms。巻き戻ったら ESP32 が再起動したと判断する */
+    val espUptimeMs: Long = 0,
+    /** 接続中に検出した ESP32 の再起動回数 (アプリ起動からの累計) */
+    val espReboots: Int = 0,
+    /** ESP32 の起動理由 (esp_reset_reason)。-1 = 不明 */
+    val espResetReason: Int = -1,
     val uartOk: Long = 0,
     val uartCrcErrors: Long = 0,
     /** アプリがこのデータを受け取った時刻 (SystemClock.elapsedRealtime) */
@@ -139,6 +145,8 @@ object TelemetryParser {
             values = values,
             frames = frames,
             unknown = unknown,
+            espUptimeMs = o.optLong("t"),
+            espResetReason = link?.optInt("rst", -1) ?: -1,
             uartOk = link?.optLong("ok") ?: 0,
             uartCrcErrors = link?.optLong("crc") ?: 0,
             receivedAt = now,

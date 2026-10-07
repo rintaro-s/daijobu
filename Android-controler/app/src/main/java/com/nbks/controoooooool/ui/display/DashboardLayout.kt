@@ -79,6 +79,7 @@ object DashboardLayout : DisplayLayout {
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             WheelPanel(telemetry)
+                            GyroPanel(telemetry)
                             ControlPanel(telemetry)
                         }
                     }
@@ -86,6 +87,7 @@ object DashboardLayout : DisplayLayout {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         LiftPanel(telemetry)
                         WheelPanel(telemetry)
+                        GyroPanel(telemetry)
                         ShotPanel(telemetry)
                         ControlPanel(telemetry)
                     }
@@ -140,9 +142,10 @@ object DashboardLayout : DisplayLayout {
                             DebugSpec.stateName(Mech.LIFT, r.int("state")) to None,
                             (if (r.has(DebugSpec.F_HOMED)) "HOME済" else "未原点") to
                                 (if (r.has(DebugSpec.F_HOMED)) Ok else Warn),
-                            *DebugSpec.liftLimitNames(if (r.has(DebugSpec.F_SENSOR)) r.int("limit") ?: 0 else 0)
-                                .map { it to Warn }.toTypedArray(),
-                            *DebugSpec.errorNames(err).map { it to Bad }.toTypedArray(),
+                            *DebugSpec.liftLimitNames(r.int("limit") ?: 0).map { it to Warn }.toTypedArray(),
+                            *(if (r.has(DebugSpec.F_V30) && !r.has(DebugSpec.F_PEER_FRESH))
+                                arrayOf("他軸位置途絶" to Warn) else emptyArray()),
+                            *DebugSpec.errorNamesFor(Mech.LIFT, err).map { it to Bad }.toTypedArray(),
                         )
                     }
                 }
@@ -195,6 +198,34 @@ object DashboardLayout : DisplayLayout {
         }
     }
 
+    // ---- ジャイロ (0x200) ----
+    @Composable
+    private fun GyroPanel(t: Telemetry) {
+        val r = DebugSpec.Reader(t, "GYRO")
+        val flags = r.int("flags") ?: 0
+        val valid = DebugSpec.gyroValid(flags)
+        Panel("ジャイロ") {
+            Stale(DebugSpec.link(t, unit("GYRO"))) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Tags(
+                        (if (valid) "測定VALID" else "IMU測定無効") to (if (valid) Ok else Warn),
+                        DebugSpec.calText(flags, r.int("cal")) to None,
+                    )
+                    Text(
+                        "Y ${DebugSpec.degText(r.dbl("yaw"), valid)}  R ${DebugSpec.degText(r.dbl("roll"), valid)}  " +
+                            "P ${DebugSpec.degText(r.dbl("pitch"), valid)}",
+                        fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                    )
+                    Text(
+                        "Gz ${DebugSpec.degText(r.dbl("gz"), valid, "dps")}   " +
+                            "STATUS ${r.int("sys_status") ?: "--"} ERR ${r.int("sys_err") ?: "--"}",
+                        fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+    }
+
     // ---- 発射・装填 (0x310: 操作mainの指令状態) ----
     @Composable
     private fun ShotPanel(t: Telemetry) {
@@ -207,7 +238,7 @@ object DashboardLayout : DisplayLayout {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Label("PWM", 40.dp)
                         Bar(pwm?.let { it / 1000f }, BarPos, Modifier.weight(1f))
-                        Value(pwm?.let { "%.1f%%".format(it / 10.0) } ?: "--", 58.dp)
+                        Value(pwm?.toString() ?: "--", 58.dp)
                     }
                     Text(
                         "角度 ${r.int("angle")?.let { "$it°" } ?: "--"}   " +
@@ -302,7 +333,7 @@ object DashboardLayout : DisplayLayout {
     private fun Bar(ratio: Float?, color: Color, modifier: Modifier) {
         Box(
             modifier.height(12.dp).clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         ) {
             if (ratio != null) {
                 Box(Modifier.fillMaxWidth(ratio.coerceIn(0f, 1f)).fillMaxHeight().background(color))
@@ -315,7 +346,7 @@ object DashboardLayout : DisplayLayout {
     private fun CenterBar(ratio: Float?, modifier: Modifier) {
         BoxWithConstraints(
             modifier.height(8.dp).clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         ) {
             val half = maxWidth / 2
             if (ratio != null) {

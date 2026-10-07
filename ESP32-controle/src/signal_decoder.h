@@ -18,6 +18,9 @@ String dataJson(uint32_t nowMs, uint32_t uartOk, uint32_t uartCrcErr);
 // 1 秒ごとに呼んで受信レートを更新
 void updateRates();
 
+// ESP32 の起動理由 (esp_reset_reason) を JSON に載せる。再起動やブラウンアウトの切り分け用
+void setBootReason(int reason);
+
 // デバッグ表示用
 String summary(uint32_t nowMs);
 

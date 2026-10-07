@@ -25,7 +25,7 @@ struct IdState {
   float hz = 0;
   // SEQ (仕様: uint8 の差分で飛びを数える。欠落の手掛かりであり保証ではない)
   bool haveSeq = false;
-  uint8_t seq = 0;
+  uint16_t seq = 0;
   uint32_t seqLost = 0;
   uint32_t duplicates = 0;  // SEQ・稼働時間とも前回と同じフレーム (新しい更新ではない)
   bool haveUptime = false;
@@ -37,6 +37,7 @@ struct IdState {
 };
 
 IdState states[kNumFrames];
+int bootReason = -1;
 
 // 診断用: テーブルに無い ID (拡張IDを含む) の受信記録。何が実際にバスに流れているかを見る
 struct UnknownId {
@@ -195,11 +196,12 @@ void onFrame(const CanFrame &f, uint32_t nowMs) {
   st.lastReject = Reject::None;
 
   if (r.seqByte >= 0) {
-    uint8_t seq = f.data[r.seqByte];
+    // SEQ は ID ごとに幅が違う (昇降 uint8 / ジャイロ uint16)。差分は同じ幅で計算して折り返しを吸収する
+    uint16_t seq = r.seqWide ? (uint16_t)readLe(&f.data[r.seqByte], 2) : f.data[r.seqByte];
     bool hasUp = r.uptimeByte >= 0;
     uint32_t up = hasUp ? readLe(&f.data[r.uptimeByte], 4) : 0;
     if (st.haveSeq) {
-      uint8_t diff = (uint8_t)(seq - st.seq);
+      uint16_t diff = r.seqWide ? (uint16_t)(seq - st.seq) : (uint16_t)(uint8_t)(seq - st.seq);
       if (hasUp && st.haveUptime && diff == 0 && up == st.uptime) {
         // 完全な重複: 新しい更新の証拠にならないので受信時刻・値を更新しない
         st.duplicates++;
@@ -228,6 +230,8 @@ void updateRates() {
     st.countAtLastRate = st.count;
   }
 }
+
+void setBootReason(int reason) { bootReason = reason; }
 
 String schemaJson() {
   String js;
@@ -276,7 +280,7 @@ String dataJson(uint32_t nowMs, uint32_t uartOk, uint32_t uartCrcErr) {
     js += ",\"hz\":";
     appendNumber(js, st.hz);
     js += ",\"seq\":";
-    if (st.haveSeq) js += st.seq; else js += "null";
+    if (st.haveSeq) js += (unsigned long)st.seq; else js += "null";
     js += ",\"lost\":";
     js += st.seqLost;
     js += ",\"dup\":";
@@ -328,6 +332,8 @@ String dataJson(uint32_t nowMs, uint32_t uartOk, uint32_t uartCrcErr) {
   js += uartOk;
   js += ",\"crc\":";
   js += uartCrcErr;
+  js += ",\"rst\":";
+  js += bootReason;
   js += "}}\n";
   return js;
 }

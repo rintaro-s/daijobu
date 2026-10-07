@@ -96,6 +96,12 @@ object SignalListLayout : DisplayLayout {
             }
         }
         Text(
+            "ESP32 稼働 ${DebugSpec.uptimeText(t.espUptimeMs)}  再起動 ${t.espReboots}回  起動理由 ${resetReasonText(t.espResetReason)}",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (t.espReboots > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
             "UART ok=${t.uartOk} crc_err=${t.uartCrcErrors}",
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.bodySmall,
@@ -153,4 +159,15 @@ object SignalListLayout : DisplayLayout {
             fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
         )
     }
+}
+
+/** esp_reset_reason() の値。電源起動以外 (特に 9=ブラウンアウト) は電源や処理落ちの手掛かり */
+private fun resetReasonText(r: Int) = when (r) {
+    -1 -> "--"
+    1 -> "電源投入"
+    3 -> "ソフトリセット"
+    4 -> "クラッシュ"
+    5, 6, 7 -> "ウォッチドッグ"
+    9 -> "電源低下(ブラウンアウト)"
+    else -> "コード$r"
 }

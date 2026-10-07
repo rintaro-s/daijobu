@@ -53,6 +53,7 @@ object DebugLayout : DisplayLayout {
             "昇降" to Mech.LIFT,
             "発射・装填 (指令状態)" to Mech.SHOT,
             "足回り" to Mech.WHEEL,
+            "ジャイロ" to Mech.GYRO,
         )
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 320.dp),
@@ -148,18 +149,19 @@ object DebugLayout : DisplayLayout {
                             Mech.LIFT -> LiftBody(r)
                             Mech.SHOT -> ShotBody(r)
                             Mech.WHEEL -> WheelBody(r)
+                            Mech.GYRO -> GyroBody(r)
                             Mech.LIFT_CMD -> LiftCmdBody(r)
                             Mech.LIFT_ST -> RawBody(r)
                             Mech.SHOT_CMD -> ShotCmdBody(r)
                             Mech.LOAD_SENS -> LoadSensBody(r)
                         }
-                        if (!u.mech.isControl) CommonFooter(r)
+                        if (!u.mech.isControl && u.mech != Mech.GYRO) CommonFooter(r, u.mech)
                     }
                 }
                 if (frame != null && (frame.seq != null || frame.rejected > 0)) {
                     Text(
                         buildString {
-                            append("SEQ ${frame.seq ?: "--"}  欠落 ${frame.seqLost}")
+                            append("経過 ${if (frame.ageMs < 0) "--" else "${frame.ageMs}ms"}  SEQ ${frame.seq ?: "--"}  欠落 ${frame.seqLost}")
                             if (frame.duplicates > 0) append("  重複 ${frame.duplicates}")
                             if (frame.rejected > 0) append("  不正 ${frame.rejected}")
                             append("  %.0fHz".format(frame.hz))
@@ -213,11 +215,38 @@ object DebugLayout : DisplayLayout {
         val refText =
             if (ref == null || !r.has(DebugSpec.F_TARGET) || ref == DebugSpec.I32_INVALID) "未計測" else "$ref"
         Mono("POS $posText   REF $refText")
-        if (r.has(DebugSpec.F_SENSOR)) {
-            BitChips("リミット", DebugSpec.liftLimitNames(r.int("limit") ?: 0), "なし", UnsupportedColor)
-        } else {
-            Mono("リミット: 未対応")
-        }
+        // V30: リミット bit は有効性フラグを持たない (bit2 は「下限SW機能有効」の意味)
+        BitChips("リミット", DebugSpec.liftLimitNames(r.int("limit") ?: 0), "なし", UnsupportedColor)
+        Mono(
+            "下限SW機能 ${if (r.has(DebugSpec.F_LOWER_SW)) "ON" else "OFF"}   " +
+                if (!r.has(DebugSpec.F_V30)) "V30未対応(旧版)"
+                else "他軸位置 ${if (r.has(DebugSpec.F_PEER_FRESH)) "受信OK" else "途絶"}"
+        )
+    }
+
+    // ---- ジャイロ 0x200 ----
+    @Composable
+    private fun GyroBody(r: DebugSpec.Reader) {
+        val flags = r.int("flags") ?: 0
+        val valid = DebugSpec.gyroValid(flags)
+        val addr = r.int("addr")
+        MainLine(
+            if (valid) "測定 VALID" else "IMU測定無効",
+            "I2C ${if (flags and 1 != 0) "OK" else "NG"}",
+            addr?.let { "0x%02X".format(it) } ?: "--",
+        )
+        // 測定無効のとき角度・角速度欄は 0 で送られてくるが、実際の 0 ではないので「--」にする
+        Mono(
+            "Yaw ${DebugSpec.degText(r.dbl("yaw"), valid)}  Roll ${DebugSpec.degText(r.dbl("roll"), valid)}" +
+                "  Pitch ${DebugSpec.degText(r.dbl("pitch"), valid)}"
+        )
+        Mono(
+            "Gyro X ${DebugSpec.degText(r.dbl("gx"), valid, "dps")}  Y ${DebugSpec.degText(r.dbl("gy"), valid, "dps")}" +
+                "  Z ${DebugSpec.degText(r.dbl("gz"), valid, "dps")}"
+        )
+        Mono("校正 ${DebugSpec.calText(flags, r.int("cal"))}")
+        Mono("SYS_STATUS ${r.int("sys_status") ?: "--"}   SYS_ERR ${r.int("sys_err") ?: "--"}")
+        Mono("稼働 ${DebugSpec.uptimeText(r.long("uptime"))}")
     }
 
     // ---- 発射・装填・サーボ指令状態 0x310 (操作mainが把握している指令。機構の応答ではない) ----
@@ -225,7 +254,7 @@ object DebugLayout : DisplayLayout {
     private fun ShotBody(r: DebugSpec.Reader) {
         MainLine(
             DebugSpec.stateName(Mech.SHOT, r.int("state")),
-            "PWM ${r.int("pwm")?.let { "%.1f%%".format(it / 10.0) } ?: "--"}",
+            "PWM ${r.int("pwm") ?: "--"}",
             "角度 ${r.int("angle")?.let { "${it}°" } ?: "--"}",
         )
         BitChips("指令", DebugSpec.cmd310Names(r.int("cmd") ?: 0), "なし", OkColor)
@@ -254,7 +283,7 @@ object DebugLayout : DisplayLayout {
     @Composable
     private fun ShotCmdBody(r: DebugSpec.Reader) {
         MainLine(
-            "PWM ${r.int("pwm")?.let { "%.1f%%".format(it / 10.0) } ?: "--"}",
+            "PWM ${r.int("pwm") ?: "--"}",
             "角度 ${r.int("angle")?.let { "${it}°" } ?: "--"}",
             "プリセット ${DebugSpec.presetName(r.int("preset"))}",
         )
@@ -284,12 +313,12 @@ object DebugLayout : DisplayLayout {
 
     // ---- 共通: 指令受信状態 / 異常ビット / 稼働時間 ----
     @Composable
-    private fun CommonFooter(r: DebugSpec.Reader) {
+    private fun CommonFooter(r: DebugSpec.Reader, mech: Mech) {
         Mono(
             (if (r.has(DebugSpec.F_CMD_FRESH)) "指令受信OK" else "指令受信なし") +
                 "   稼働 ${DebugSpec.uptimeText(r.long("uptime"))}"
         )
-        BitChips("異常", DebugSpec.errorNames(r.int("err") ?: 0), "検出なし", LostColor)
+        BitChips("異常", DebugSpec.errorNamesFor(mech, r.int("err") ?: 0), "検出なし", LostColor)
     }
 
     @Composable

@@ -47,6 +47,7 @@ struct FrameRule {
   int8_t uptimeByte;  // 送信元稼働時間 (uint32 LE) のバイト位置 (-1 = 無し)
                       //   SEQ と稼働時間が前回と同じ -> 重複として捨てる
                       //   稼働時間が巻き戻った     -> 送信元の再起動とみなし欠落に数えない
+  bool seqWide;       // true: SEQ は uint16 LE (ジャイロ 0x200) / false: uint8
 };
 
 #define SIG_SCALED(id, name, type, byte, scale, ofs, mn, mx, unit, group) \
@@ -89,7 +90,7 @@ struct FrameRule {
   SIG_U8(id, p ".flags", 3, 0, 255, p),                    \
   SIG_U32(id, p ".uptime", 4, 0, 4294967295.0f, p)
 
-// 昇降 0x301～0x303
+// 昇降 0x301～0x303 (V30: 20ms 周期。byte3 bit6/7 と故障 bit4/5/6 は V30 で追加。他軸との位置共有にも使う)
 #define DBG_LIFT(id, p)                                    \
   DBG_HEADER(id, p),                                       \
   SIG_U16(id, p ".rate", 8, 0, 1000, p),        /* 0xFFFF=無効 */ \
@@ -123,7 +124,33 @@ struct FrameRule {
   SIG_U16(id, p ".stop", 20, 0, 65535, p),                 \
   SIG_U16(id, p ".err", 22, 0, 65535, p)
 
-#define DBG_RULE(id) {(id), DBG_LEN, true, true, true, 0, DBG_VERSION, 1, 4}
+#define DBG_RULE(id) {(id), DBG_LEN, true, true, true, 0, DBG_VERSION, 1, 4, false}
+
+// ---------------------------------------------------------------------------
+//  ジャイロ 0x200 (BNO055 基板 -> main1 / 監視main2)  24 byte / バージョン 1 / 50Hz
+//    昇降 (0x301-0x303) とは別形式: SEQ は byte4-5 の uint16、稼働時間は byte20-23、
+//    有効性フラグは byte1 (bit0=I2C成功, bit1=融合測定有効。測定有効は (flags & 3) == 3)。
+//    角度・角速度は i16 を 16 で割って度 / 度毎秒。測定無効のときこれらは 0 で送られてくるが
+//    実際の 0 ではないので、表示側 (アプリ) が「無効」として扱う。
+//    校正 byte2: SYS=bit7-6 GYR=bit5-4 ACC=bit3-2 MAG=bit1-0 (I2C失敗時は 0xFF = 不明)
+// ---------------------------------------------------------------------------
+#define ID_GYRO 0x200
+#define GYRO_RULE {ID_GYRO, 24, true, true, true, 0, 1, 4, 20, true}
+#define GYRO_DEG(name, byte) \
+  SIG_SCALED(ID_GYRO, name, I16, byte, 0.0625f, 0.0f, -360.0f, 360.0f, "deg", "GYRO")
+#define GYRO_DPS(name, byte) \
+  SIG_SCALED(ID_GYRO, name, I16, byte, 0.0625f, 0.0f, -2000.0f, 2000.0f, "dps", "GYRO")
+#define DBG_GYRO                                           \
+  SIG_U8(ID_GYRO, "GYRO.ver", 0, 0, 255, "GYRO"),          \
+  SIG_U8(ID_GYRO, "GYRO.flags", 1, 0, 255, "GYRO"),        \
+  SIG_U8(ID_GYRO, "GYRO.cal", 2, 0, 255, "GYRO"),          \
+  SIG_U8(ID_GYRO, "GYRO.addr", 3, 0, 255, "GYRO"),         \
+  SIG_U16(ID_GYRO, "GYRO.seq", 4, 0, 65535, "GYRO"),       \
+  SIG_U8(ID_GYRO, "GYRO.sys_status", 6, 0, 255, "GYRO"),   \
+  SIG_U8(ID_GYRO, "GYRO.sys_err", 7, 0, 255, "GYRO"),      \
+  GYRO_DEG("GYRO.yaw", 8), GYRO_DEG("GYRO.roll", 10), GYRO_DEG("GYRO.pitch", 12), \
+  GYRO_DPS("GYRO.gx", 14), GYRO_DPS("GYRO.gy", 16), GYRO_DPS("GYRO.gz", 18),      \
+  SIG_U32(ID_GYRO, "GYRO.uptime", 20, 0, 4294967295.0f, "GYRO")
 
 // ---------------------------------------------------------------------------
 //  制御・安全用 ID (表示のみ。ここで何かを判断・停止はしない)
@@ -144,15 +171,16 @@ struct FrameRule {
 // 受信する CAN ID と有効条件
 static const FrameRule CAN_FRAMES[] = {
     // コントローラ: 20 byte 以上あれば受け付ける (既存フレームなので条件は緩め)
-    {ID_PAD, 20, false, false, false, -1, 0, -1, -1},
+    {ID_PAD, 20, false, false, false, -1, 0, -1, -1, false},
+    GYRO_RULE,
 
     // 制御用 (長さ・バージョン・SEQ は台帳どおり)
-    {ID_LIFT_CMD, 8, true, true, true, 0, 1, 2, -1},
-    {ID_LIFT_ST1, 8, true, true, true, -1, 0, -1, -1},
-    {ID_LIFT_ST2, 8, true, true, true, -1, 0, -1, -1},
-    {ID_LIFT_ST3, 8, true, true, true, -1, 0, -1, -1},
-    {ID_SHOT_CMD, 8, true, true, true, 0, 2, 2, -1},
-    {ID_LOAD_SENS, 4, true, true, true, 0, 1, 2, -1},
+    {ID_LIFT_CMD, 8, true, true, true, 0, 1, 2, -1, false},
+    {ID_LIFT_ST1, 8, true, true, true, -1, 0, -1, -1, false},
+    {ID_LIFT_ST2, 8, true, true, true, -1, 0, -1, -1, false},
+    {ID_LIFT_ST3, 8, true, true, true, -1, 0, -1, -1, false},
+    {ID_SHOT_CMD, 8, true, true, true, 0, 2, 2, -1, false},
+    {ID_LOAD_SENS, 4, true, true, true, 0, 1, 2, -1, false},
 
     DBG_RULE(0x301), DBG_RULE(0x302), DBG_RULE(0x303),
     DBG_RULE(0x310),
@@ -204,6 +232,7 @@ static const SignalDef CAN_SIGNALS[] = {
     SIG_U8(ID_LOAD_SENS, "LSEN.ready", 3, 0, 1, "LSEN"),
 
     // 信号名の接頭辞はアプリ側 (DebugSpec.kt) と一致させること
+    DBG_GYRO,
     DBG_LIFT(0x301, "LIFT1"),
     DBG_LIFT(0x302, "LIFT2"),
     DBG_LIFT(0x303, "LIFT3"),
