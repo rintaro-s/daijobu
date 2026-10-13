@@ -151,7 +151,9 @@ object DebugLayout : DisplayLayout {
                             Mech.WHEEL -> WheelBody(r)
                             Mech.GYRO -> GyroBody(r)
                             Mech.LIFT_CMD -> LiftCmdBody(r)
-                            Mech.LIFT_ST -> RawBody(r)
+                            Mech.LIFT_ST -> LiftStBody(r)
+                            Mech.LOAD_REV -> LoadRevBody(r)
+                            Mech.HEADING -> HeadingBody(r)
                             Mech.SHOT_CMD -> ShotCmdBody(r)
                             Mech.LOAD_SENS -> LoadSensBody(r)
                         }
@@ -215,12 +217,15 @@ object DebugLayout : DisplayLayout {
         val refText =
             if (ref == null || !r.has(DebugSpec.F_TARGET) || ref == DebugSpec.I32_INVALID) "未計測" else "$ref"
         Mono("POS $posText   REF $refText")
-        // V30: リミット bit は有効性フラグを持たない (bit2 は「下限SW機能有効」の意味)
         BitChips("リミット", DebugSpec.liftLimitNames(r.int("limit") ?: 0), "なし", UnsupportedColor)
         Mono(
             "下限SW機能 ${if (r.has(DebugSpec.F_LOWER_SW)) "ON" else "OFF"}   " +
-                if (!r.has(DebugSpec.F_V30)) "V30未対応(旧版)"
-                else "他軸位置 ${if (r.has(DebugSpec.F_PEER_FRESH)) "受信OK" else "途絶"}"
+                "上限保持 ${if (r.has(DebugSpec.F_HOLD_ACTIVE)) "ACTIVE" else "--"}"
+        )
+        // main1 はこの POS を受信しない。POS の差を高さの差として扱わない
+        Text(
+            "POS は counts。3軸の POS 差は高さ差ではない",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline,
         )
     }
 
@@ -261,7 +266,7 @@ object DebugLayout : DisplayLayout {
         Mono(
             "調整 ${DebugSpec.adjustName(r.int("adjust"))}   " +
                 "プリセット ${DebugSpec.presetName(r.int("preset"))}   " +
-                "装填段階 ${r.int("stage") ?: "--"}"
+                "phase ${DebugSpec.shotPhaseName(r.int("stage"))}"
         )
         Mono("センサー ${DebugSpec.sensorName(r.int("sensor"))} (${DebugSpec.ageText(r.int("sensor_age"))})")
         Mono("コントローラー受信 ${DebugSpec.ageText(r.int("ctrl_age"))}")
@@ -274,10 +279,53 @@ object DebugLayout : DisplayLayout {
         Mono("ver ${r.int("ver") ?: "--"}   SEQ ${r.int("seq") ?: "--"}")
     }
 
+    // 0x141-143 昇降リミット状態 (昇降 -> main1)
     @Composable
-    private fun RawBody(r: DebugSpec.Reader) {
-        // 中身の並びが台帳に無いので生バイトで表示
-        Mono((0..7).joinToString(" ") { i -> r.int("b$i")?.let { "%02X".format(it) } ?: "--" })
+    private fun LiftStBody(r: DebugSpec.Reader) {
+        val f = r.int("flags") ?: 0
+        val fault = r.int("fault")
+        MainLine("BOARD ${r.int("board") ?: "--"}", "fault ${DebugSpec.liftFaultName(fault)}")
+        Mono(
+            "下方向禁止ラッチ ${flag(r.int("down_latch"))}   物理下限(デバウンス) ${flag(r.int("lower"))}   " +
+                "生の下限 ${flag(r.int("raw_lower"))}"
+        )
+        BitChips(
+            "状態",
+            buildList {
+                if (f and 1 != 0) add("HOME済")
+                if (f and 2 != 0) add("上限ラッチ")
+            },
+            "なし", OkColor,
+        )
+        Mono("SEQ ${r.int("seq") ?: "--"}")
+    }
+
+    private fun flag(v: Int?) = when (v) { null -> "--"; 0 -> "OFF"; else -> "ON" }
+
+    // 0x151 装填 手動逆転 (main1 -> 装填1・2)。指令であって実回転の証明ではない
+    @Composable
+    private fun LoadRevBody(r: DebugSpec.Reader) {
+        val f = r.int("flags") ?: 0
+        val fresh = f and 1 != 0
+        val allow = f and 2 != 0
+        MainLine(if (allow) "逆転 許可" else "逆転 OFF", if (fresh) "入力fresh" else "入力古い")
+        Mono("対象 ${r.int("mask")?.let { if (it == 3) "装填1・2" else "不正($it)" } ?: "--"}   SEQ ${r.int("seq") ?: "--"}")
+        Text(
+            "指令の表示です。実際の回転を測った値ではありません",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline,
+        )
+    }
+
+    // 0x201 足回り方位補正 (main1 -> 足回り4)
+    @Composable
+    private fun HeadingBody(r: DebugSpec.Reader) {
+        val corr = r.int("corr")
+        MainLine(
+            "補正 ${corr?.let { "%+d".format(it) } ?: "--"}",
+            "誤差 ${r.dbl("err")?.let { "%+.1f°".format(it) } ?: "--"}",
+        )
+        BitChips("状態", DebugSpec.heading201Names(r.int("flags") ?: 0), "なし", OkColor)
+        Mono("モード ${DebugSpec.headingModeName(r.int("mode"))}   SEQ ${r.int("seq") ?: "--"}")
     }
 
     @Composable
@@ -292,10 +340,13 @@ object DebugLayout : DisplayLayout {
 
     @Composable
     private fun LoadSensBody(r: DebugSpec.Reader) {
+        val boot = (r.int("boot") ?: 0) != 0
         MainLine(
-            "センサー ${if ((r.int("sensor") ?: 0) != 0) "検出" else "非検出"}",
-            if ((r.int("ready") ?: 0) != 0) "準備完了" else "準備中",
+            "S1 ${if ((r.int("s1") ?: 0) != 0) "検出" else "非検出"}",
+            "S2 ${if ((r.int("s2") ?: 0) != 0) "検出" else "非検出"}",
         )
+        Mono("S2 検出 ${r.int("s2_det") ?: "--"} 回   解除 ${r.int("s2_rel") ?: "--"} 回   SEQ ${r.int("seq") ?: "--"}")
+        if (boot) BitChips("起動", listOf("起動報告中 (main1 は fault 扱い)"), "", UnsupportedColor)
     }
 
     // ---- 足回り ----

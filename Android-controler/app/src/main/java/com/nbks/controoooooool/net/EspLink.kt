@@ -8,8 +8,8 @@ import android.net.NetworkRequest
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.SystemClock
 import android.util.Log
+import com.nbks.controoooooool.can.CanDecoder
 import com.nbks.controoooooool.model.Telemetry
-import com.nbks.controoooooool.model.TelemetryParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,7 +21,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
@@ -64,15 +63,32 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     private var espReboots = 0
     private var lastEspUptime = -1L
 
+    // 読み替えはすべてアプリ側で行う (ESP32 は CAN フレームを転送するだけ)
+    private val decoder = CanDecoder()
+    private var tickerJob: Job? = null
+    @Volatile private var uartOk = 0L
+    @Volatile private var uartCrc = 0L
+    @Volatile private var espUptimeMs = 0L
+    @Volatile private var espResetReason = -1
+
     fun start() {
         if (loopJob?.isActive == true) return
         requestSpecifierNetwork()
         loopJob = scope.launch(Dispatchers.IO) { connectLoop() }
+        // 受信が止まっても経過時間は進めて、途絶が表示に出るようにする
+        tickerJob = scope.launch(Dispatchers.Default) {
+            while (isActive) {
+                publish()
+                delay(TICK_MS)
+            }
+        }
     }
 
     fun stop() {
         loopJob?.cancel()
         loopJob = null
+        tickerJob?.cancel()
+        tickerJob = null
         closeSocket()
         unregisterCallback()
         specifierNetwork = null
@@ -182,31 +198,59 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
         }
     }
 
+    private fun publish() {
+        _telemetry.value = decoder.snapshot(SystemClock.elapsedRealtime()).copy(
+            espUptimeMs = espUptimeMs,
+            espReboots = espReboots,
+            espResetReason = espResetReason,
+            uartOk = uartOk,
+            uartCrcErrors = uartCrc,
+        )
+    }
+
+    /**
+     * ESP32 から届く行を処理する。
+     *   F,<ID 16進>,<flags>,<データ 16進>   CAN フレーム
+     *   S,<稼働ms>,<UART受信OK>,<CRCエラー>,<起動理由>,<空きヒープ>   ESP32 の状態
+     */
     private fun readLines(s: Socket) {
-        val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
-        var schema = _telemetry.value.schema
+        val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.US_ASCII), 16 * 1024)
         while (true) {
             val line = reader.readLine() ?: throw java.io.EOFException("closed by ESP32")
-            if (line.isBlank()) continue
+            if (line.length < 3) continue
             try {
-                val o = JSONObject(line)
-                when (o.optString("type")) {
-                    "schema" -> {
-                        schema = TelemetryParser.parseSchema(o)
-                        _telemetry.value = _telemetry.value.copy(schema = schema)
-                    }
-                    "data" -> {
-                        val t = TelemetryParser.parseData(o, schema, SystemClock.elapsedRealtime())
+                val p = line.split(',')
+                when (p[0]) {
+                    "F" -> decoder.onFrame(
+                        id = p[1].toInt(16),
+                        flags = p[2].toInt(),
+                        data = hexToBytes(p[3]),
+                        nowMs = SystemClock.elapsedRealtime(),
+                    )
+                    "S" -> {
+                        val up = p[1].toLong()
                         // ESP32 の稼働時間が巻き戻ったら ESP32 が再起動した (電源低下・クラッシュ等の見分け用)
-                        if (lastEspUptime >= 0 && t.espUptimeMs + 1000 < lastEspUptime) espReboots++
-                        lastEspUptime = t.espUptimeMs
-                        _telemetry.value = t.copy(espReboots = espReboots)
+                        if (lastEspUptime >= 0 && up + 1000 < lastEspUptime) espReboots++
+                        lastEspUptime = up
+                        espUptimeMs = up
+                        uartOk = p[2].toLong()
+                        uartCrc = p[3].toLong()
+                        espResetReason = p[4].toInt()
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "bad line: ${e.message}")
             }
         }
+    }
+
+    private fun hexToBytes(h: String): ByteArray {
+        val n = h.length / 2
+        val out = ByteArray(n)
+        for (i in 0 until n) {
+            out[i] = ((Character.digit(h[2 * i], 16) shl 4) or Character.digit(h[2 * i + 1], 16)).toByte()
+        }
+        return out
     }
 
     private fun closeSocket() {
@@ -218,5 +262,6 @@ class EspLink(context: Context, private val scope: CoroutineScope) {
     companion object {
         private const val TAG = "EspLink"
         private const val SPECIFIER_RETRY_MS = 30_000L
+        private const val TICK_MS = 50L
     }
 }

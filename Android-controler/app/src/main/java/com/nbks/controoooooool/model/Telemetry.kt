@@ -1,7 +1,5 @@
 package com.nbks.controoooooool.model
 
-import org.json.JSONObject
-
 /** ESP32 が接続直後に送ってくる信号定義 (ESP32-controle/include/can_signals.h 由来) */
 data class SignalInfo(
     val name: String,
@@ -83,73 +81,4 @@ data class Telemetry(
     fun frameOf(name: String): FrameStatus? = schema.find(name)?.let { frame(it.canId) }
 
     val anyFresh: Boolean get() = frames.any { it.ageMs in 0..schema.timeoutMs }
-}
-
-object TelemetryParser {
-    fun parseSchema(o: JSONObject): Schema {
-        val arr = o.getJSONArray("signals")
-        val list = (0 until arr.length()).map { i ->
-            val s = arr.getJSONObject(i)
-            SignalInfo(
-                name = s.getString("name"),
-                canId = s.getLong("id"),
-                type = s.optString("type"),
-                isBool = s.optBoolean("bool"),
-                min = s.optDouble("min", 0.0),
-                max = s.optDouble("max", 1.0),
-                unit = s.optString("unit"),
-                group = s.optString("group"),
-            )
-        }
-        return Schema(list, o.optLong("timeout", 300))
-    }
-
-    fun parseData(o: JSONObject, schema: Schema, now: Long): Telemetry {
-        val v = o.getJSONObject("v")
-        val values = HashMap<String, Double>(v.length())
-        for (key in v.keys()) {
-            val d = v.optDouble(key)
-            if (!d.isNaN()) values[key] = d
-        }
-
-        val fa = o.getJSONArray("frames")
-        val frames = (0 until fa.length()).map { i ->
-            val f = fa.getJSONObject(i)
-            FrameStatus(
-                canId = f.getLong("id"),
-                ageMs = f.getLong("age"),
-                hz = f.optDouble("hz", 0.0),
-                seq = if (f.isNull("seq")) null else f.optInt("seq"),
-                seqLost = f.optLong("lost"),
-                duplicates = f.optLong("dup"),
-                rejected = f.optLong("bad"),
-                reject = if (f.isNull("rej")) null else f.optString("rej"),
-            )
-        }
-        val ua = o.optJSONArray("unknown")
-        val unknown = if (ua == null) emptyList() else (0 until ua.length()).map { i ->
-            val u = ua.getJSONObject(i)
-            UnknownFrame(
-                canId = u.getLong("id"),
-                extended = u.optBoolean("ext"),
-                fd = u.optBoolean("fd"),
-                brs = u.optBoolean("brs"),
-                len = u.optInt("len"),
-                count = u.optLong("count"),
-                ageMs = u.optLong("age"),
-            )
-        }
-        val link = o.optJSONObject("link")
-        return Telemetry(
-            schema = schema,
-            values = values,
-            frames = frames,
-            unknown = unknown,
-            espUptimeMs = o.optLong("t"),
-            espResetReason = link?.optInt("rst", -1) ?: -1,
-            uartOk = link?.optLong("ok") ?: 0,
-            uartCrcErrors = link?.optLong("crc") ?: 0,
-            receivedAt = now,
-        )
-    }
 }

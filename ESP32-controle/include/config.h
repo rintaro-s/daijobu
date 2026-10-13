@@ -32,8 +32,14 @@
 #endif
 
 // ---- 配信 ----
-#ifndef SEND_PERIOD_MS
-#define SEND_PERIOD_MS 50  // 20 Hz (1 行約 3.5KB)
+#ifndef FLUSH_PERIOD_MS
+#define FLUSH_PERIOD_MS 10  // 受けたフレームをこの周期でまとめてスマホへ送る
+#endif
+#ifndef STAT_PERIOD_MS
+#define STAT_PERIOD_MS 1000  // ESP32 の状態 (稼働時間・UART 受信数・起動理由) を送る周期
+#endif
+#ifndef CLIENT_BACKLOG_MAX
+#define CLIENT_BACKLOG_MAX 12288  // 1 台あたりの送り残しの上限 (バイト)。超えた分は捨てる
 #endif
 #ifndef CLIENT_STALL_TIMEOUT_MS
 #define CLIENT_STALL_TIMEOUT_MS 2000  // この時間送れない相手は切断する (スマホが消えた等)

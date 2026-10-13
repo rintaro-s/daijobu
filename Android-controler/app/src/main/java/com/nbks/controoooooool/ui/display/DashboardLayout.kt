@@ -143,8 +143,7 @@ object DashboardLayout : DisplayLayout {
                             (if (r.has(DebugSpec.F_HOMED)) "HOME済" else "未原点") to
                                 (if (r.has(DebugSpec.F_HOMED)) Ok else Warn),
                             *DebugSpec.liftLimitNames(r.int("limit") ?: 0).map { it to Warn }.toTypedArray(),
-                            *(if (r.has(DebugSpec.F_V30) && !r.has(DebugSpec.F_PEER_FRESH))
-                                arrayOf("他軸位置途絶" to Warn) else emptyArray()),
+                            *(if (r.has(DebugSpec.F_HOLD_ACTIVE)) arrayOf("上限保持" to Ok) else emptyArray()),
                             *DebugSpec.errorNamesFor(Mech.LIFT, err).map { it to Bad }.toTypedArray(),
                         )
                     }
@@ -192,7 +191,7 @@ object DashboardLayout : DisplayLayout {
                 )
                 Tags(
                     *(if (stop != 0) arrayOf(DebugSpec.stopReason(stop) to Warn) else emptyArray()),
-                    *DebugSpec.errorNames(err).map { it to Bad }.toTypedArray(),
+                    *DebugSpec.errorNamesFor(Mech.WHEEL, err).map { it to Bad }.toTypedArray(),
                 )
             }
         }
@@ -248,10 +247,10 @@ object DashboardLayout : DisplayLayout {
                     )
                     Tags(
                         *DebugSpec.cmd310Names(r.int("cmd") ?: 0).map {
-                            it to if (it == "停止ラッチ") Bad else Ok
+                            it to if (it == "HALT") Bad else Ok
                         }.toTypedArray(),
                         ("センサー " + DebugSpec.sensorName(r.int("sensor"))) to None,
-                        *DebugSpec.errorNames(r.int("err") ?: 0).map { it to Bad }.toTypedArray(),
+                        *DebugSpec.errorNamesFor(Mech.SHOT, r.int("err") ?: 0).map { it to Bad }.toTypedArray(),
                     )
                 }
             }
@@ -274,12 +273,33 @@ object DashboardLayout : DisplayLayout {
             val ls = DebugSpec.Reader(t, "LSEN")
             Stale(DebugSpec.link(t, unit("LSEN"))) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Label("装填センサー", 92.dp)
+                    Label("S1 / S2", 92.dp)
+                    val s1 = (ls.int("s1") ?: 0) != 0
+                    val s2 = (ls.int("s2") ?: 0) != 0
                     Tags(
-                        (if ((ls.int("sensor") ?: 0) != 0) "検出" else "非検出") to
-                            (if ((ls.int("sensor") ?: 0) != 0) Ok else None),
-                        (if ((ls.int("ready") ?: 0) != 0) "準備完了" else "準備中") to
-                            (if ((ls.int("ready") ?: 0) != 0) Ok else Warn),
+                        (if (s1) "S1 検出" else "S1 非検出") to (if (s1) Ok else None),
+                        (if (s2) "S2 検出" else "S2 非検出") to (if (s2) Ok else None),
+                        *(if ((ls.int("boot") ?: 0) != 0) arrayOf("起動報告中" to Warn) else emptyArray()),
+                    )
+                }
+            }
+            val lr = DebugSpec.Reader(t, "LREV")
+            Stale(DebugSpec.link(t, unit("LREV"))) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Label("装填逆転", 92.dp)
+                    val allow = ((lr.int("flags") ?: 0) and 2) != 0
+                    Tags((if (allow) "逆転 許可" else "逆転 OFF") to (if (allow) Warn else None))
+                }
+            }
+            val hd = DebugSpec.Reader(t, "HDG")
+            Stale(DebugSpec.link(t, unit("HDG"))) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Label("方位補正", 92.dp)
+                    val f = hd.int("flags") ?: 0
+                    Tags(
+                        (if (f and 2 != 0) "補正適用許可" else "補正なし") to (if (f and 2 != 0) Ok else None),
+                        "指令 ${hd.int("corr")?.let { "%+d".format(it) } ?: "--"}" to None,
+                        "誤差 ${hd.dbl("err")?.let { "%+.1f°".format(it) } ?: "--"}" to None,
                     )
                 }
             }

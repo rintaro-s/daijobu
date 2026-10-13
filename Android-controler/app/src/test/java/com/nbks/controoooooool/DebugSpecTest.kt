@@ -53,12 +53,12 @@ class DebugSpecTest {
 
     @Test
     fun states_and_bits() {
-        assertEquals("PWMゼロ", DebugSpec.stateName(Mech.LIFT, 0))
+        assertEquals("停止", DebugSpec.stateName(Mech.LIFT, 0))
         assertEquals("未使用(3)", DebugSpec.stateName(Mech.LIFT, 3))
         assertEquals("未対応(5)", DebugSpec.stateName(Mech.LIFT, 5))
-        assertEquals("状態 4", DebugSpec.stateName(Mech.SHOT, 4))
-        assertEquals(listOf("発射RUN", "MINUS調整"), DebugSpec.cmd310Names(0x21))
-        assertEquals(listOf("入力有効", "予約bit(0x80)"), DebugSpec.cmd150Names(0x81))
+        assertEquals("HALT", DebugSpec.stateName(Mech.SHOT, 4))
+        assertEquals(listOf("発射RUN", "調整"), DebugSpec.cmd310Names(0x21))
+        assertEquals(listOf("入力fresh", "予約bit(0x80)"), DebugSpec.cmd150Names(0x81))
         assertEquals("未受信", DebugSpec.ageText(65535))
         assertEquals("反転待ち", DebugSpec.stateName(Mech.WHEEL, 3))
         assertEquals("未対応(4)", DebugSpec.stopReason(4))
@@ -96,10 +96,28 @@ class GyroSpecTest {
     @Test
     fun lift_v30_error_bits() {
         assertEquals(
-            listOf("逆方向カウント", "カウント飛び/範囲異常", "3台位置差継続"),
-            DebugSpec.errorNamesFor(DebugSpec.Mech.LIFT, 0x0070),
+            listOf("stall", "保持誤差", "RX fault"),
+            DebugSpec.errorNamesFor(DebugSpec.Mech.LIFT, 0x0092),
         )
-        // 足回りは従来の共通定義のまま
-        assertEquals(listOf("ドライバ異常"), DebugSpec.errorNamesFor(DebugSpec.Mech.WHEEL, 0x0010))
+        // 引き継ぎ資料に無いビットは予約として出す (意味を勝手に付けない)
+        assertEquals(listOf("予約bit(0x0020)"), DebugSpec.errorNamesFor(DebugSpec.Mech.LIFT, 0x0020))
+        assertEquals(listOf("通信古い", "FIFO欠落", "制御遅れ"), DebugSpec.errorNamesFor(DebugSpec.Mech.WHEEL, 0x000D))
+        assertEquals(listOf("入力古い", "センサー古い"), DebugSpec.errorNamesFor(DebugSpec.Mech.SHOT, 0x0041))
+    }
+}
+
+class HandoverSpecTest {
+    @Test
+    fun preset_and_phase_names() {
+        assertEquals("上", DebugSpec.presetName(0))
+        assertEquals("下", DebugSpec.presetName(1))
+        assertEquals("右", DebugSpec.presetName(3))
+        assertEquals("初期/手動", DebugSpec.presetName(255))
+        assertEquals("Y・S1検出待ち", DebugSpec.shotPhaseName(3))
+        assertEquals("stall", DebugSpec.liftFaultName(1))
+        assertEquals("保持誤差", DebugSpec.liftFaultName(2))
+        assertEquals("不正(3)", DebugSpec.headingModeName(3))
+        assertEquals(listOf("補正適用許可", "IMU fresh"), DebugSpec.heading201Names(0x12))
+        assertEquals(listOf("UP禁止", "DOWN禁止"), DebugSpec.lift130Names(0x06))
     }
 }

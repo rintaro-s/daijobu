@@ -238,9 +238,8 @@ object TuningLayout : DisplayLayout {
         // 横画面は 1 行に収めるため、エンコーダー関連の異常は短い名前にする (詳細は縦画面 / 機構タブ)
         val e = r.int("err") ?: 0
         val encErr = buildList {
-            if (e and 0x02 != 0) add("停滞")
-            if (e and 0x10 != 0) add("逆転")
-            if (e and 0x20 != 0) add("飛び")
+            if (e and 0x02 != 0) add("stall")
+            if (e and 0x10 != 0) add("保持誤差")
         }
         // 1 軸 = 2 行 (1 行目: 軸名・タグ・率 / 2 行目: POS・REF・差)。3 軸が確実に 1 画面へ収まるようにする
         Column(Modifier.alpha(if (link == Link.Ok) 1f else 0.45f), verticalArrangement = Arrangement.spacedBy((2 * k).dp)) {
@@ -443,7 +442,7 @@ object TuningLayout : DisplayLayout {
         val homed = r.has(DebugSpec.F_HOMED)
         val err = r.int("err") ?: 0
         // エンコーダーに関する故障のビット (停滞 / 逆方向カウント / カウント飛び)
-        val encErr = DebugSpec.errorNamesFor(Mech.LIFT, err and 0x0032)
+        val encErr = DebugSpec.errorNamesFor(Mech.LIFT, err and 0x0012)
 
         Column(Modifier.alpha(if (link == Link.Ok) 1f else 0.45f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -504,7 +503,7 @@ object TuningLayout : DisplayLayout {
     private fun Spread(t: Telemetry, prefixes: List<String>) {
         val v = posSpread(t, prefixes)
         val text = if (v == null) "3軸の POS 差: --  (全軸が受信中かつ原点確定のときだけ計算)"
-        else "3軸の POS 差 (max-min): %,d  [監視側の推定]".format(v)
+        else "3軸の POS 差 (max-min): %,d counts  [監視側の推定。高さ差ではない]".format(v)
         Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
     }
 
