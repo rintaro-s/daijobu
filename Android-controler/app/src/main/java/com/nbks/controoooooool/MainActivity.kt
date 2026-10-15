@@ -1,7 +1,9 @@
 package com.nbks.controoooooool
 
 import android.Manifest
+import android.content.Intent
 import android.content.res.Configuration
+import android.widget.Toast
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -44,7 +46,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.material3.TextButton
+import com.nbks.controoooooool.record.RecordCodec
+import com.nbks.controoooooool.record.RecordMode
+import com.nbks.controoooooool.ui.RecordScreen
+import com.nbks.controoooooool.ui.SettingsDialog
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nbks.controoooooool.model.Telemetry
@@ -72,7 +82,35 @@ class MainActivity : ComponentActivity() {
 private fun MonitorScreen(vm: MonitorViewModel) {
     val state by vm.linkState.collectAsState()
     val telemetry by vm.telemetry.collectAsState()
+    val records by vm.records.collectAsState()
+    val mode by vm.mode.collectAsState()
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    // 「入った」ボタン: 押した瞬間のサーボ角度と速度を記録する
+    val onMark: () -> Unit = {
+        val r = vm.markIn()
+        if (r != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            Toast.makeText(
+                context,
+                "記録 #${vm.records.value.size} [${r.mode.short}] " +
+                    "角度 ${r.angleDeg?.let { "$it°" } ?: "--"} / 速度 ${r.pwmPermille ?: "--"}" +
+                    if (r.stale) " (前回値)" else "",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+    val onShare: () -> Unit = {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "記録 (${records.size} 件)")
+            putExtra(Intent.EXTRA_TEXT, RecordCodec.csv(records))
+        }
+        context.startActivity(Intent.createChooser(send, "記録 CSV を共有"))
+    }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     // Android 13+ の Wi-Fi 周辺機器権限を取ってから自動接続 (拒否されても接続自体は試す)。
@@ -89,7 +127,19 @@ private fun MonitorScreen(vm: MonitorViewModel) {
     }
 
     val layouts = DisplayLayouts.all
-    val selected = tab.coerceIn(layouts.indices)
+    // 末尾に「記録」タブを足す (表示レイアウトとは別物なので、ここで特別扱いする)
+    val titles = layouts.map { it.title } + "記録"
+    val selected = tab.coerceIn(titles.indices)
+
+    if (showSettings) {
+        SettingsDialog(
+            mode = mode,
+            recordCount = records.size,
+            onSelectMode = vm::setMode,
+            onClearAll = vm::clearRecords,
+            onDismiss = { showSettings = false },
+        )
+    }
 
     // 横画面ではノッチが左右に来るので safeDrawing で避ける
     Scaffold(Modifier.fillMaxSize(), contentWindowInsets = WindowInsets.safeDrawing) { inner ->
@@ -98,20 +148,23 @@ private fun MonitorScreen(vm: MonitorViewModel) {
                 // 横画面: 高さが貴重なので、状態表示とタブを 1 行にまとめる
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     StatusBar(
-                        state, telemetry, vm::connect, vm::disconnect,
+                        state, telemetry, mode, vm::connect, vm::disconnect, onMark, { showSettings = true },
                         Modifier.weight(1f),
                     )
-                    if (layouts.size > 1) {
-                        LayoutTabs(layouts.map { it.title }, selected, { tab = it }, Modifier.width(400.dp))
-                    }
+                    LayoutTabs(titles, selected, { tab = it }, Modifier.width(440.dp))
                 }
             } else {
-                StatusBar(state, telemetry, vm::connect, vm::disconnect, Modifier.fillMaxWidth())
-                if (layouts.size > 1) {
-                    LayoutTabs(layouts.map { it.title }, selected, { tab = it }, Modifier.fillMaxWidth())
-                }
+                StatusBar(
+                    state, telemetry, mode, vm::connect, vm::disconnect, onMark, { showSettings = true },
+                    Modifier.fillMaxWidth(),
+                )
+                LayoutTabs(titles, selected, { tab = it }, Modifier.fillMaxWidth())
             }
-            layouts[selected].Content(telemetry, Modifier.fillMaxWidth().weight(1f))
+            if (selected < layouts.size) {
+                layouts[selected].Content(telemetry, Modifier.fillMaxWidth().weight(1f))
+            } else {
+                RecordScreen(records, mode, onShare, vm::delete, Modifier.fillMaxWidth().weight(1f))
+            }
         }
     }
 }
@@ -136,8 +189,11 @@ private fun LayoutTabs(titles: List<String>, selected: Int, onSelect: (Int) -> U
 private fun StatusBar(
     state: LinkState,
     telemetry: Telemetry,
+    mode: RecordMode,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onMark: () -> Unit,
+    onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val (color, text) = when (state) {
@@ -160,6 +216,18 @@ private fun StatusBar(
             fontSize = 13.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
+        // 記録のタグ (設定で切り替え) と「入った」ボタン。どのタブからでも押せる
+        Text(mode.short, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+        Spacer(Modifier.width(4.dp))
+        Button(
+            onClick = onMark,
+            modifier = Modifier.height(30.dp),
+            contentPadding = HeaderButtonPadding,
+            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFFEF6C00)),
+        ) { Text("入った", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }
+        TextButton(onClick = onSettings, modifier = Modifier.height(30.dp), contentPadding = HeaderButtonPadding) {
+            Text("設定", fontSize = 13.sp)
+        }
         if (state == LinkState.Idle || state is LinkState.Error) {
             Button(onClick = onConnect, modifier = Modifier.height(30.dp), contentPadding = HeaderButtonPadding) {
                 Text("接続", fontSize = 13.sp)

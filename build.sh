@@ -7,6 +7,7 @@
 #   1) STM32   (CAN_TEST_TX-main)   make                    -> st-flash
 #   2) ESP32   (ESP32-controle)     pio run                 -> pio run -t upload
 #   3) Android (Android-controler)  gradlew assembleDebug   -> adb install
+#   4) Android Z Fold 版 (Android-controler-fold)  同上 (別アプリとして共存)
 #
 # ビルド後に「書き込みもする？」と聞くので、y で書き込み (Enter だけならビルドのみ)。
 set -euo pipefail
@@ -15,6 +16,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 STM_DIR="$ROOT/CAN_TEST_TX-main"
 ESP_DIR="$ROOT/ESP32-controle"
 AND_DIR="$ROOT/Android-controler"
+FOLD_DIR="$ROOT/Android-controler-fold"
 
 choice="${1:-}"
 if [[ -z "$choice" ]]; then
@@ -22,7 +24,8 @@ if [[ -z "$choice" ]]; then
   echo "  1) STM32   (CAN 受信 -> UART)"
   echo "  2) ESP32   (UART -> Wi-Fi)"
   echo "  3) Android (表示アプリ)"
-  read -rp "番号 [1-3]: " choice
+  echo "  4) Android Z Fold 版 (上下分割 / 背面ディスプレイ)"
+  read -rp "番号 [1-4]: " choice
 fi
 
 ask_flash() {
@@ -72,8 +75,17 @@ case "$choice" in
       adb shell am start -n com.nbks.controoooooool/.MainActivity
     fi
     ;;
+  4)
+    echo "=== Android Z Fold 版 ビルド ==="
+    (cd "$FOLD_DIR" && ./gradlew assembleDebug)
+    echo "APK: $FOLD_DIR/app/build/outputs/apk/debug/app-debug.apk"
+    if ask_flash "USB 接続したスマホにインストールして起動する？"; then
+      (cd "$FOLD_DIR" && ./gradlew installDebug)
+      adb shell am start -n com.nbks.controoooooool.fold/com.nbks.controoooooool.MainActivity
+    fi
+    ;;
   *)
-    echo "1-3 で選んでね" >&2
+    echo "1-4 で選んでね" >&2
     exit 1
     ;;
 esac
